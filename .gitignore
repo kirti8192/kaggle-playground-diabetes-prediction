@@ -1,0 +1,13 @@
+# dummy file
+*.gitkeep
+
+# notebooks
+*.ipynb_checkpoints
+
+# python venv
+.venv/
+venv/
+*.pyc
+
+# macOS
+.DS_Store
