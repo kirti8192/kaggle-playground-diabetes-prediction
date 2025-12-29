@@ -21,10 +21,10 @@ SUBMISSION_DIR = "/kaggle/working"
 SUBMISSION_PREFIX = "submission"
 SUBMISSION_TAG = "lgbm_cv_optuna"
 
-TRAIN_PATH = "../data/raw/playground-series-s5e12/train.csv"
-TEST_PATH = "../data/raw/playground-series-s5e12/test.csv"
+# TRAIN_PATH = "../data/raw/playground-series-s5e12/train.csv"
+# TEST_PATH = "../data/raw/playground-series-s5e12/test.csv"
 
-SUBMISSION_DIR = "../submissions"
+# SUBMISSION_DIR = "../submissions"
 
 # %%
 def load_data(train_path, test_path):
@@ -112,7 +112,8 @@ LGBM_REG_ALPHA = 0.0
 LGBM_REG_LAMBDA = 1.0
 
 LGBM_EARLY_STOPPING_ROUNDS = 200
-LGBM_VERBOSE = 100
+LGBM_LOG_EVAL_PERIOD = 0  # set >0 to log every N rounds
+LGBM_VERBOSITY = -1
 
 
 # %%
@@ -161,6 +162,8 @@ def build_model(seed, params=None):
         reg_lambda=reg_lambda,
         random_state=seed,
         n_jobs=-1,
+        device_type="gpu",
+        verbosity=LGBM_VERBOSITY,
     )
 
 # %%
@@ -200,16 +203,18 @@ def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_ver
                 X_test[c] = X_test[c].astype("category")
 
         model = build_model(seed, params=model_params)
+        callbacks = [
+            lgb.early_stopping(stopping_rounds=LGBM_EARLY_STOPPING_ROUNDS, verbose=False),
+        ]
+        if eval_verbose and eval_verbose > 0:
+            callbacks.append(lgb.log_evaluation(period=eval_verbose))
         model.fit(
             X_train,
             y_train,
             eval_set=[(X_val, y_val)],
             eval_metric=["auc", "binary_logloss"],
             categorical_feature=[c for c in CAT_COLS if c in X_train.columns],
-            callbacks=[
-                lgb.early_stopping(stopping_rounds=LGBM_EARLY_STOPPING_ROUNDS, verbose=True),
-                lgb.log_evaluation(period=eval_verbose),
-            ],
+            callbacks=callbacks,
         )
 
         y_val_pred = model.predict_proba(X_val)[:, 1]
@@ -398,7 +403,7 @@ def main():
         N_FOLDS,
         TARGET,
         ID_COLUMN,
-        LGBM_VERBOSE,
+        LGBM_LOG_EVAL_PERIOD,
         model_params=best_params,
         return_models=True,
     )

@@ -40,19 +40,26 @@ SUBMISSION_DIR = "../submissions"
 SUBMISSION_PREFIX = "submission"
 SUBMISSION_TAG = "lgbm_cv"
 
+# Optuna best params: 
+# {'n_estimators': 4890, 'learning_rate': 0.12511547004171678, 'num_leaves': 24, 
+# 'max_depth': 2, 'min_child_samples': 134, 'subsample': 0.9624457541570358, 
+# 'colsample_bytree': 0.9506589893038976, 'reg_alpha': 2.51545560767482, 
+# 'reg_lambda': 4.83334465226836}
+
 # LightGBM params (baseline; tune later)
-LGBM_N_ESTIMATORS = 5000
-LGBM_LEARNING_RATE = 0.05
-LGBM_NUM_LEAVES = 64
-LGBM_MAX_DEPTH = -1
-LGBM_MIN_CHILD_SAMPLES = 50
-LGBM_SUBSAMPLE = 0.8
-LGBM_COLSAMPLE_BYTREE = 0.8
-LGBM_REG_ALPHA = 0.0
-LGBM_REG_LAMBDA = 1.0
+LGBM_N_ESTIMATORS = 4890
+LGBM_LEARNING_RATE = 0.12511547004171678
+LGBM_NUM_LEAVES = 24
+LGBM_MAX_DEPTH = 2
+LGBM_MIN_CHILD_SAMPLES = 134
+LGBM_SUBSAMPLE = 0.9624457541570358
+LGBM_COLSAMPLE_BYTREE = 0.9506589893038976
+LGBM_REG_ALPHA = 2.51545560767482
+LGBM_REG_LAMBDA = 4.83334465226836
 
 LGBM_EARLY_STOPPING_ROUNDS = 200
-LGBM_VERBOSE = 100
+LGBM_LOG_EVAL_PERIOD = 0  # set >0 to log every N rounds
+LGBM_VERBOSITY = -1
 
 
 # %%
@@ -94,6 +101,7 @@ def build_model(seed):
         reg_lambda=LGBM_REG_LAMBDA,
         random_state=seed,
         n_jobs=-1,
+        verbosity=LGBM_VERBOSITY,
     )
 
 # %%
@@ -133,16 +141,21 @@ def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_ver
                 X_test[c] = X_test[c].astype("category")
 
         model = build_model(seed)
+        callbacks = [
+            __import__("lightgbm").early_stopping(
+                stopping_rounds=LGBM_EARLY_STOPPING_ROUNDS,
+                verbose=False,
+            ),
+        ]
+        if eval_verbose and eval_verbose > 0:
+            callbacks.append(__import__("lightgbm").log_evaluation(period=eval_verbose))
         model.fit(
             X_train,
             y_train,
             eval_set=[(X_val, y_val)],
             eval_metric=["auc", "binary_logloss"],
             categorical_feature=[c for c in CAT_COLS if c in X_train.columns],
-            callbacks=[
-                __import__("lightgbm").early_stopping(stopping_rounds=LGBM_EARLY_STOPPING_ROUNDS, verbose=True),
-                __import__("lightgbm").log_evaluation(period=eval_verbose),
-            ],
+            callbacks=callbacks,
         )
 
         y_val_pred = model.predict_proba(X_val)[:, 1]
@@ -272,7 +285,7 @@ def main():
         N_FOLDS,
         TARGET,
         ID_COLUMN,
-        LGBM_VERBOSE,
+        LGBM_LOG_EVAL_PERIOD,
     )
 
     if PLOT_AUC_CURVES:
