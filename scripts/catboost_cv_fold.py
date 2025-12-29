@@ -71,46 +71,8 @@ def split_features_target(df, target, id_column):
     y = df[target].astype(int)
     return X, y
 
-# # %%
-# def encode_fold(X_train, X_val, X_test, ordinal_cols, ordinal_categories, ohe_cols):
-#     ordinal_encoder = OrdinalEncoder(categories=ordinal_categories)
-#     X_train.loc[:, ordinal_cols] = ordinal_encoder.fit_transform(X_train[ordinal_cols])
-#     X_val.loc[:, ordinal_cols] = ordinal_encoder.transform(X_val[ordinal_cols])
-#     X_test.loc[:, ordinal_cols] = ordinal_encoder.transform(X_test[ordinal_cols])
-
-#     ohe_encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
-#     X_train_ohe = ohe_encoder.fit_transform(X_train[ohe_cols])
-#     X_val_ohe = ohe_encoder.transform(X_val[ohe_cols])
-#     X_test_ohe = ohe_encoder.transform(X_test[ohe_cols])
-
-#     base_feature_names = X_train.drop(columns=ohe_cols).columns.tolist()
-#     ohe_feature_names = ohe_encoder.get_feature_names_out(ohe_cols).tolist()
-#     feature_names = base_feature_names + ohe_feature_names
-
-#     X_train_arr = np.concatenate([X_train.drop(columns=ohe_cols).to_numpy(), X_train_ohe], axis=1)
-#     X_val_arr = np.concatenate([X_val.drop(columns=ohe_cols).to_numpy(), X_val_ohe], axis=1)
-#     X_test_arr = np.concatenate([X_test.drop(columns=ohe_cols).to_numpy(), X_test_ohe], axis=1)
-
-#     return X_train_arr, X_val_arr, X_test_arr, feature_names
-
 # %%
 def build_model(seed):
-    # return XGBClassifier(
-    #     objective=XGB_OBJECTIVE,
-    #     eval_metric=XGB_EVAL_METRIC,
-    #     random_state=seed,
-    #     max_depth=XGB_MAX_DEPTH,
-    #     min_child_weight=XGB_MIN_CHILD_WEIGHT,
-    #     gamma=XGB_GAMMA,
-    #     n_estimators=XGB_N_ESTIMATORS,
-    #     learning_rate=XGB_LEARNING_RATE,
-    #     subsample=XGB_SUBSAMPLE,
-    #     colsample_bytree=XGB_COLSAMPLE_BYTREE,
-    #     reg_lambda=XGB_REG_LAMBDA,
-    #     reg_alpha=XGB_REG_ALPHA,
-    #     tree_method=XGB_TREE_METHOD,
-    #     early_stopping_rounds=XGB_EARLY_STOPPING_ROUNDS,
-    # )
 
     return CatBoostClassifier(
         iterations=CATBOOST_NUM_ITERATIONS,
