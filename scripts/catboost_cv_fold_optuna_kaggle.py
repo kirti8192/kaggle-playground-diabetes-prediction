@@ -2,7 +2,6 @@
 from datetime import datetime
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score
@@ -16,17 +15,16 @@ SEED = 42
 TARGET = "diagnosed_diabetes"
 ID_COLUMN = "id"
 N_FOLDS = 5
-TOP_N_IMPORTANCE = 30
 
-TRAIN_PATH = "../data/raw/playground-series-s5e12/train.csv"
-TEST_PATH = "../data/raw/playground-series-s5e12/test.csv"
+# Kaggle: inputs are mounted under /kaggle/input, outputs must go to /kaggle/working
+# If you don't know the exact competition folder name, we auto-detect train.csv/test.csv under /kaggle/input.
+TRAIN_PATH = "/kaggle/input/playground-series-s5e12/train.csv"
+TEST_PATH = "/kaggle/input/playground-series-s5e12/test.csv"
 
-SUBMISSION_DIR = "../submissions"
+SUBMISSION_DIR = "/kaggle/working"
 SUBMISSION_PREFIX = "submission"
-SUBMISSION_TAG = "catboost_cv"
+SUBMISSION_TAG = "catboost_cv_optuna"
 
-PLOT_AUC_CURVES = True
-PLOT_FEATURE_IMPORTANCE = True
 SAVE_SUBMISSION = True
 EVAL_VERBOSE = 100
 
@@ -49,7 +47,7 @@ CATBOOST_L2_LEAF_REG = 3.0
 
 # ---- Optuna tuning ----
 RUN_OPTUNA = True           # set False to skip tuning
-OPTUNA_N_TRIALS = 30        # increase later (e.g., 100+) when stable
+OPTUNA_N_TRIALS = 100        # increase later (e.g., 100+) when stable
 OPTUNA_TIMEOUT_SEC = None   # or set seconds, e.g., 3600
 OPTUNA_TUNE_FOLDS = 3       # use 3 folds for tuning speed; final training uses N_FOLDS
 OPTUNA_SHOW_PROGRESS = True
@@ -65,6 +63,44 @@ def load_data(train_path, test_path):
     train_df = pd.read_csv(train_path)
     test_df = pd.read_csv(test_path)
     return train_df, test_df
+
+def resolve_kaggle_paths(train_path, test_path):
+    """
+    Kaggle mounts datasets under /kaggle/input/<dataset_slug>/...
+    This resolves train/test CSV paths by:
+      1) Using provided paths if they exist
+      2) Otherwise searching /kaggle/input/**/train.csv and test.csv
+    """
+    train_p = Path(train_path)
+    test_p = Path(test_path)
+
+    if train_p.exists() and test_p.exists():
+        return str(train_p), str(test_p)
+
+    # Auto-detect by searching Kaggle input
+    candidates_train = sorted(Path("/kaggle/input").rglob("train.csv"))
+    candidates_test = sorted(Path("/kaggle/input").rglob("test.csv"))
+
+    if not candidates_train or not candidates_test:
+        raise FileNotFoundError(
+            f"Could not find train.csv/test.csv under /kaggle/input. "
+            f"Checked defaults train_path={train_path}, test_path={test_path}."
+        )
+
+    # Prefer paths that include 'playground' or 's5e12' if present
+    def _score(p: Path) -> int:
+        s = str(p).lower()
+        score = 0
+        if "playground" in s:
+            score += 2
+        if "s5e12" in s or "s5-e12" in s:
+            score += 2
+        return score
+
+    best_train = max(candidates_train, key=_score)
+    best_test = max(candidates_test, key=_score)
+
+    return str(best_train), str(best_test)
 
 # %%
 def feature_engineering(df):
@@ -95,10 +131,11 @@ def build_model(seed, params=None):
     l2_leaf_reg = params.get("l2_leaf_reg", CATBOOST_L2_LEAF_REG)
     random_strength = params.get("random_strength", 1.0)
     bagging_temperature = params.get("bagging_temperature", 1.0)
-    rsm = params.get("rsm", None)  # feature subsampling; None means CatBoost default
     border_count = params.get("border_count", 128)
 
     model_kwargs = dict(
+        task_type="GPU",
+        devices="0",
         iterations=iterations,
         learning_rate=learning_rate,
         depth=depth,
@@ -115,10 +152,6 @@ def build_model(seed, params=None):
         allow_writing_files=False,
         verbose=False,  # control verbosity in fit()
     )
-
-    # Only set rsm if provided
-    if rsm is not None:
-        model_kwargs["rsm"] = rsm
 
     return CatBoostClassifier(**model_kwargs)
 
@@ -195,7 +228,6 @@ def optuna_objective(trial, df_train_total, df_test, seed, target, id_column):
         "l2_leaf_reg": trial.suggest_float("l2_leaf_reg", 1.0, 10.0, log=True),
         "random_strength": trial.suggest_float("random_strength", 0.0, 2.0),
         "bagging_temperature": trial.suggest_float("bagging_temperature", 0.0, 2.0),        # row subsampling
-        "rsm": trial.suggest_float("rsm", 0.6, 1.0),                                        # feature subsampling
         "border_count": trial.suggest_categorical("border_count", [64, 128, 254]),          # feature binning
     }
 
@@ -228,93 +260,6 @@ def run_optuna_tuning(df_train_total, df_test, seed, target, id_column):
     print("Optuna best params:", study.best_params)
     return study.best_params, study.best_value
 
-# %%
-def plot_auc_curves(fold_eval_results):
-    """
-    CatBoost stores eval history in a dict like:
-      {
-        "learn": {"Logloss": [...], "AUC": [...]},
-        "validation": {"Logloss": [...], "AUC": [...]}
-      }
-    Metric key casing can vary; we try common variants.
-    This function plots per-iteration curves for BOTH Logloss and AUC.
-    """
-    def _pick_metric(metrics_dict, candidates):
-        for k in candidates:
-            if k in metrics_dict:
-                return k
-        return None
-
-    # Two separate figures for readability
-    fig1 = plt.figure(figsize=(10, 6))
-    for fold_idx, evals_result in enumerate(fold_eval_results, start=1):
-        val_dict = evals_result.get("validation") or evals_result.get("validation_0") or {}
-        logloss_key = _pick_metric(val_dict, ["Logloss", "logloss", "LogLoss", "loss"])
-        if logloss_key is None:
-            continue
-        curve = val_dict[logloss_key]
-        plt.plot(range(1, len(curve) + 1), curve, label=f"Fold {fold_idx}")
-    plt.xlabel("Iteration")
-    plt.ylabel("Validation Logloss")
-    plt.title("CatBoost Validation Logloss per Iteration (per fold)")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.show()
-
-    fig2 = plt.figure(figsize=(10, 6))
-    for fold_idx, evals_result in enumerate(fold_eval_results, start=1):
-        val_dict = evals_result.get("validation") or evals_result.get("validation_0") or {}
-        auc_key = _pick_metric(val_dict, ["AUC", "auc"])
-        if auc_key is None:
-            continue
-        curve = val_dict[auc_key]
-        plt.plot(range(1, len(curve) + 1), curve, label=f"Fold {fold_idx}")
-    plt.xlabel("Iteration")
-    plt.ylabel("Validation AUC")
-    plt.title("CatBoost Validation AUC per Iteration (per fold)")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.show()
-
-# %%
-def plot_feature_importance(model, feature_names, top_n):
-    """
-    CatBoost feature importance. We use PredictionValuesChange (default) which is
-    fast and works well for debugging.
-    """
-    feature_importances = model.get_feature_importance()
-    if len(feature_importances) != len(feature_names):
-        raise ValueError(
-            f"Mismatch: importances={len(feature_importances)} vs names={len(feature_names)}. "
-            "This indicates a preprocessing/feature-name alignment issue."
-        )
-
-    # sort descending
-    sorted_idx = np.argsort(feature_importances)[::-1]
-
-    if top_n is not None and top_n > 0:
-        top_n = min(top_n, len(sorted_idx))
-        sorted_idx = sorted_idx[:top_n]
-
-    # For barh, reverse to have the largest on top
-    sorted_idx_plot = sorted_idx[::-1]
-
-    plt.figure(figsize=(12, 8))
-    plt.barh(
-        range(len(sorted_idx_plot)),
-        feature_importances[sorted_idx_plot],
-        align="center",
-    )
-    plt.yticks(
-        range(len(sorted_idx_plot)),
-        [feature_names[i] for i in sorted_idx_plot],
-    )
-    plt.xlabel("Feature Importance")
-    plt.title("CatBoost Feature Importance")
-    plt.tight_layout()
-    plt.show()
 
 # %%
 def save_submission(df_test, y_pred, id_column, target, submission_dir, submission_prefix, submission_tag):
@@ -337,7 +282,8 @@ def save_submission(df_test, y_pred, id_column, target, submission_dir, submissi
 
 # %%
 def main():
-    df_train_total, df_test = load_data(TRAIN_PATH, TEST_PATH)
+    train_path, test_path = resolve_kaggle_paths(TRAIN_PATH, TEST_PATH)
+    df_train_total, df_test = load_data(train_path, test_path)
     df_train_total = feature_engineering(df_train_total)
     df_test = feature_engineering(df_test)
 
@@ -364,16 +310,6 @@ def main():
         model_params=best_params,
         return_models=True,
     )
-
-    if PLOT_AUC_CURVES:
-        plot_auc_curves(cv_results["fold_eval_results"])
-
-    if PLOT_FEATURE_IMPORTANCE:
-        plot_feature_importance(
-            cv_results["models"][-1],
-            cv_results["feature_names_per_fold"][-1],
-            TOP_N_IMPORTANCE,
-        )
 
     if SAVE_SUBMISSION:
         y_test_pred = np.mean(np.vstack(cv_results["test_pred_folds"]), axis=0)

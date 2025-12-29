@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold
-from catboost import CatBoostClassifier
+from lightgbm import LGBMClassifier
 
 # %%
 # params
@@ -15,20 +15,10 @@ SEED = 42
 TARGET = "diagnosed_diabetes"
 ID_COLUMN = "id"
 N_FOLDS = 5
+
 TOP_N_IMPORTANCE = 30
 
-TRAIN_PATH = "../data/raw/playground-series-s5e12/train.csv"
-TEST_PATH = "../data/raw/playground-series-s5e12/test.csv"
-
-SUBMISSION_DIR = "../submissions"
-SUBMISSION_PREFIX = "submission"
-SUBMISSION_TAG = "catboost_cv"
-
-PLOT_AUC_CURVES = True
-PLOT_FEATURE_IMPORTANCE = True
-SAVE_SUBMISSION = True
-EVAL_VERBOSE = 100
-
+# categorical columns (native LightGBM categorical handling)
 CAT_COLS = [
     "education_level",
     "income_level",
@@ -38,24 +28,31 @@ CAT_COLS = [
     "employment_status",
 ]
 
-# optuna fine-tuned hyperparams
+# toggles
+PLOT_AUC_CURVES = True
+PLOT_FEATURE_IMPORTANCE = True
+SAVE_SUBMISSION = True
 
-# Trial 27 finished with value: 0.7267291760703681 
-# parameters: {'iterations': 3838, 'learning_rate': 0.05359374417837557, 
-# 'depth': 5, 'l2_leaf_reg': 5.104333350702094, 'random_strength': 1.747464298900436, 
-# 'bagging_temperature': 0.5210398649951489, 'border_count': 254}. 
-# Best is trial 27 with value: 0.7267291760703681.
+TRAIN_PATH = "../data/raw/playground-series-s5e12/train.csv"
+TEST_PATH = "../data/raw/playground-series-s5e12/test.csv"
 
-CATBOOST_NUM_ITERATIONS = 3838
-CATBOOST_LEARNING_RATE = 0.05359374417837557
-CATBOOST_DEPTH = 5
-CATBOOST_EARLY_STOPPING_ROUNDS = 100
-CATBOOST_EVAL_METRIC = "AUC"
-CATBOOST_LOSS_FUNCTION = "Logloss"
-CATBOOST_L2_LEAF_REG = 5.104333350702094
-CATBOOST_RANDOM_STRENGTH = 1.747464298900436
-CATBOOST_BAGGING_TEMPERATURE = 0.5210398649951489
-CATBOOST_BORDER_COUNT = 254
+SUBMISSION_DIR = "../submissions"
+SUBMISSION_PREFIX = "submission"
+SUBMISSION_TAG = "lgbm_cv"
+
+# LightGBM params (baseline; tune later)
+LGBM_N_ESTIMATORS = 5000
+LGBM_LEARNING_RATE = 0.05
+LGBM_NUM_LEAVES = 64
+LGBM_MAX_DEPTH = -1
+LGBM_MIN_CHILD_SAMPLES = 50
+LGBM_SUBSAMPLE = 0.8
+LGBM_COLSAMPLE_BYTREE = 0.8
+LGBM_REG_ALPHA = 0.0
+LGBM_REG_LAMBDA = 1.0
+
+LGBM_EARLY_STOPPING_ROUNDS = 200
+LGBM_VERBOSE = 100
 
 
 # %%
@@ -84,21 +81,19 @@ def split_features_target(df, target, id_column):
 
 # %%
 def build_model(seed):
-
-    return CatBoostClassifier(
-        iterations=CATBOOST_NUM_ITERATIONS,
-        learning_rate=CATBOOST_LEARNING_RATE,
-        depth=CATBOOST_DEPTH,
-        random_seed=seed,
-        early_stopping_rounds=CATBOOST_EARLY_STOPPING_ROUNDS,
-        eval_metric=CATBOOST_EVAL_METRIC,
-        verbose=True,
-        loss_function=CATBOOST_LOSS_FUNCTION,
-        l2_leaf_reg=CATBOOST_L2_LEAF_REG,
-        allow_writing_files=False,
-        random_strength=CATBOOST_RANDOM_STRENGTH,
-        bagging_temperature=CATBOOST_BAGGING_TEMPERATURE,
-        border_count=CATBOOST_BORDER_COUNT,
+    return LGBMClassifier(
+        objective="binary",
+        n_estimators=LGBM_N_ESTIMATORS,
+        learning_rate=LGBM_LEARNING_RATE,
+        num_leaves=LGBM_NUM_LEAVES,
+        max_depth=LGBM_MAX_DEPTH,
+        min_child_samples=LGBM_MIN_CHILD_SAMPLES,
+        subsample=LGBM_SUBSAMPLE,
+        colsample_bytree=LGBM_COLSAMPLE_BYTREE,
+        reg_alpha=LGBM_REG_ALPHA,
+        reg_lambda=LGBM_REG_LAMBDA,
+        random_state=seed,
+        n_jobs=-1,
     )
 
 # %%
@@ -130,24 +125,31 @@ def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_ver
 
         X_test = df_test.drop(columns=[id_column]).copy()
 
-        # get categorical feature indices for CatBoost
-        cat_feature_indices = [X_train.columns.get_loc(col) for col in CAT_COLS if col in X_train.columns]
+        # LightGBM: use native categorical handling by setting dtype=category
+        for c in CAT_COLS:
+            if c in X_train.columns:
+                X_train[c] = X_train[c].astype("category")
+                X_val[c] = X_val[c].astype("category")
+                X_test[c] = X_test[c].astype("category")
 
         model = build_model(seed)
         model.fit(
             X_train,
             y_train,
-            cat_features=cat_feature_indices,
-            eval_set=(X_val, y_val),
-            use_best_model=True,
-            verbose=eval_verbose,
+            eval_set=[(X_val, y_val)],
+            eval_metric=["auc", "binary_logloss"],
+            categorical_feature=[c for c in CAT_COLS if c in X_train.columns],
+            callbacks=[
+                __import__("lightgbm").early_stopping(stopping_rounds=LGBM_EARLY_STOPPING_ROUNDS, verbose=True),
+                __import__("lightgbm").log_evaluation(period=eval_verbose),
+            ],
         )
 
         y_val_pred = model.predict_proba(X_val)[:, 1]
         val_auc = roc_auc_score(y_val, y_val_pred)
         print(f"Fold {fold_idx} Validation AUC: {val_auc:.4f}")
 
-        fold_eval_results.append(model.get_evals_result())
+        fold_eval_results.append(model.evals_result_)
         models.append(model)
         feature_names_per_fold.append(X_train.columns.tolist())
         test_pred_folds.append(model.predict_proba(X_test)[:, 1])
@@ -164,48 +166,48 @@ def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_ver
 # %%
 def plot_auc_curves(fold_eval_results):
     """
-    CatBoost stores eval history in a dict like:
+    LightGBM stores eval history in a dict like:
       {
-        "learn": {"Logloss": [...], "AUC": [...]},
-        "validation": {"Logloss": [...], "AUC": [...]}
+        "training": {"auc": [...], "binary_logloss": [...]},
+        "valid_0": {"auc": [...], "binary_logloss": [...]}
       }
-    Metric key casing can vary; we try common variants.
-    This function plots per-iteration curves for BOTH Logloss and AUC.
+    This plots per-iteration curves for BOTH binary_logloss and auc on the validation set.
     """
-    def _pick_metric(metrics_dict, candidates):
+    def _pick(metrics_dict, candidates):
         for k in candidates:
             if k in metrics_dict:
                 return k
         return None
 
-    # Two separate figures for readability
-    fig1 = plt.figure(figsize=(10, 6))
+    # Logloss
+    plt.figure(figsize=(10, 6))
     for fold_idx, evals_result in enumerate(fold_eval_results, start=1):
-        val_dict = evals_result.get("validation") or evals_result.get("validation_0") or {}
-        logloss_key = _pick_metric(val_dict, ["Logloss", "logloss", "LogLoss", "loss"])
-        if logloss_key is None:
+        val_dict = evals_result.get("valid_0", {})
+        loss_key = _pick(val_dict, ["binary_logloss", "logloss", "l2"])
+        if loss_key is None:
             continue
-        curve = val_dict[logloss_key]
+        curve = val_dict[loss_key]
         plt.plot(range(1, len(curve) + 1), curve, label=f"Fold {fold_idx}")
     plt.xlabel("Iteration")
     plt.ylabel("Validation Logloss")
-    plt.title("CatBoost Validation Logloss per Iteration (per fold)")
+    plt.title("LightGBM Validation Logloss per Iteration (per fold)")
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.show()
 
-    fig2 = plt.figure(figsize=(10, 6))
+    # AUC
+    plt.figure(figsize=(10, 6))
     for fold_idx, evals_result in enumerate(fold_eval_results, start=1):
-        val_dict = evals_result.get("validation") or evals_result.get("validation_0") or {}
-        auc_key = _pick_metric(val_dict, ["AUC", "auc"])
+        val_dict = evals_result.get("valid_0", {})
+        auc_key = _pick(val_dict, ["auc"])
         if auc_key is None:
             continue
         curve = val_dict[auc_key]
         plt.plot(range(1, len(curve) + 1), curve, label=f"Fold {fold_idx}")
     plt.xlabel("Iteration")
     plt.ylabel("Validation AUC")
-    plt.title("CatBoost Validation AUC per Iteration (per fold)")
+    plt.title("LightGBM Validation AUC per Iteration (per fold)")
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -214,38 +216,27 @@ def plot_auc_curves(fold_eval_results):
 # %%
 def plot_feature_importance(model, feature_names, top_n):
     """
-    CatBoost feature importance. We use PredictionValuesChange (default) which is
-    fast and works well for debugging.
+    LightGBM feature importance from the sklearn API.
     """
-    feature_importances = model.get_feature_importance()
+    feature_importances = model.feature_importances_
     if len(feature_importances) != len(feature_names):
         raise ValueError(
             f"Mismatch: importances={len(feature_importances)} vs names={len(feature_names)}. "
             "This indicates a preprocessing/feature-name alignment issue."
         )
 
-    # sort descending
     sorted_idx = np.argsort(feature_importances)[::-1]
-
     if top_n is not None and top_n > 0:
         top_n = min(top_n, len(sorted_idx))
         sorted_idx = sorted_idx[:top_n]
 
-    # For barh, reverse to have the largest on top
     sorted_idx_plot = sorted_idx[::-1]
 
     plt.figure(figsize=(12, 8))
-    plt.barh(
-        range(len(sorted_idx_plot)),
-        feature_importances[sorted_idx_plot],
-        align="center",
-    )
-    plt.yticks(
-        range(len(sorted_idx_plot)),
-        [feature_names[i] for i in sorted_idx_plot],
-    )
+    plt.barh(range(len(sorted_idx_plot)), feature_importances[sorted_idx_plot], align="center")
+    plt.yticks(range(len(sorted_idx_plot)), [feature_names[i] for i in sorted_idx_plot])
     plt.xlabel("Feature Importance")
-    plt.title("CatBoost Feature Importance")
+    plt.title("LightGBM Feature Importance")
     plt.tight_layout()
     plt.show()
 
@@ -281,7 +272,7 @@ def main():
         N_FOLDS,
         TARGET,
         ID_COLUMN,
-        EVAL_VERBOSE,
+        LGBM_VERBOSE,
     )
 
     if PLOT_AUC_CURVES:
