@@ -23,7 +23,7 @@ TEST_PATH = "../data/raw/playground-series-s5e12/test.csv"
 
 SUBMISSION_DIR = "../submissions"
 SUBMISSION_PREFIX = "submission"
-SUBMISSION_TAG = "cv"
+SUBMISSION_TAG = "xgboost_cv"
 
 PLOT_AUC_CURVES = False
 PLOT_FEATURE_IMPORTANCE = False
