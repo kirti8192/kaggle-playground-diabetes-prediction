@@ -40,7 +40,7 @@ LOG_BASENAME = "cv_fold_lightgbm"
 
 SAVE_MODEL = True
 MODEL_DIR = "../models"
-MODEL_FILENAME = "lightgbm_optuna.txt"
+MODEL_FILENAME = "lightgbm_optuna_model.txt"
 
 TRAIN_PATH = "../data/raw/playground-series-s5e12/train.csv"
 TEST_PATH = "../data/raw/playground-series-s5e12/test.csv"
@@ -49,7 +49,7 @@ SUBMISSION_DIR = "../submissions"
 SUBMISSION_PREFIX = "submission"
 SUBMISSION_TAG = "lgbm_cv"
 
-LGBM_PARAMS_PATH = "../parameters/lightgbm_optuna.json"
+LGBM_PARAMS_PATH = "../parameters/lightgbm_optuna_params.json"
 
 LGBM_EARLY_STOPPING_ROUNDS = 200
 LGBM_LOG_EVAL_PERIOD = 0  # set >0 to log every N rounds
@@ -375,11 +375,11 @@ def save_logs(log_records, best_records, log_dir, log_basename):
     if log_records:
         log_df = pd.DataFrame(log_records)
         log_df = log_df[["model", "fold", "iteration", "split", "metric", "value"]]
-        log_df.to_csv(log_dir / f"{log_basename}.csv", index=False)
+        log_df.to_csv(log_dir / f"{log_basename}_stats.csv", index=False)
     if best_records:
         best_df = pd.DataFrame(best_records)
         best_df = best_df[["model", "fold", "best_iteration", "best_val_auc", "best_val_logloss"]]
-        best_df.to_csv(log_dir / f"{log_basename}_summary.csv", index=False)
+        best_df.to_csv(log_dir / f"{log_basename}_summary_stats.csv", index=False)
 
 # %%
 def main():
