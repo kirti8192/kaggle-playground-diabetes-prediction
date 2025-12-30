@@ -43,19 +43,20 @@ def load_stats(stats_csv: Path) -> pd.DataFrame:
     df["split"] = df["split"].astype(str).str.strip().str.lower()
     df["metric"] = df["metric"].astype(str).str.strip().str.lower()
 
-    # Normalize common aliases
-    split_map = {
-        "train": "train",
-        "training": "train",
-        "learn": "train",
-        "tr": "train",
-        "val": "val",
-        "valid": "val",
-        "validation": "val",
-        "eval": "val",
-        "test": "val",  # some libraries call the eval set 'test'
-    }
-    df["split"] = df["split"].map(lambda s: split_map.get(s, s))
+    # Normalize common aliases / library-specific labels
+    def _norm_split(s: str) -> str:
+        s = s.strip().lower()
+
+        # LightGBM often uses valid_0 / valid_1, CatBoost uses learn/validation
+        if s.startswith("valid") or s.startswith("val") or s.startswith("eval"):
+            return "val"
+        if s.startswith("train") or s in {"learn", "tr", "training"}:
+            return "train"
+        if s.startswith("test"):
+            return "val"  # treat as eval set for plotting
+        return s
+
+    df["split"] = df["split"].map(_norm_split)
 
     metric_map = {
         "auc": "auc",
@@ -267,10 +268,16 @@ def plot_compare_models_mean_std(
         wide = _pivot_metric(all_stats, metric=metric, split=split, model=model, allow_empty=True)
         if wide.empty:
             continue
-        mean = wide.mean(axis=1)
-        std = wide.std(axis=1)
-        ax.plot(mean.index, mean, label=model)
-        ax.fill_between(mean.index, mean - std, mean + std, alpha=0.2)
+        mean = wide.mean(axis=1, skipna=True)
+        std = wide.std(axis=1, skipna=True)
+
+        mask = mean.notna() & std.notna()
+        x = mean.index[mask]
+        y = mean[mask]
+        s = std[mask]
+
+        ax.plot(x, y, label=model)
+        ax.fill_between(x, y - s, y + s, alpha=0.2)
 
     ax.set_xlabel("Boosting iteration")
     ax.set_ylabel(metric)
