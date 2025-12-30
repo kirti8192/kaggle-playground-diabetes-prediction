@@ -39,6 +39,9 @@ SAVE_MODEL = True
 MODEL_DIR = "../models"
 MODEL_FILENAME = "xgboost_optuna_model.json"
 
+FIGURE_DIR = "../figures"
+FIGURE_BASENAME = "cv_fold_xgboost"
+
 ORDINAL_COLS = [
     "education_level",
     "income_level",
@@ -340,7 +343,7 @@ def plot_auc_curves(fold_eval_results):
     Plot validation AUC curves
     """
 
-    plt.figure(figsize=(10, 6))
+    fig = plt.figure(figsize=(10, 6))
     for fold_idx, evals_result in enumerate(fold_eval_results, start=1):
         val_auc_curve = evals_result["validation_0"]["auc"]
         plt.plot(range(1, len(val_auc_curve) + 1), val_auc_curve, label=f"Fold {fold_idx}")
@@ -350,6 +353,7 @@ def plot_auc_curves(fold_eval_results):
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
+    save_figure(fig, FIGURE_DIR, f"{FIGURE_BASENAME}_auc.png")
     plt.show()
 
 # %%
@@ -370,12 +374,13 @@ def plot_feature_importance(model, feature_names, top_n):
         top_n = min(top_n, len(sorted_idx))
         sorted_idx = sorted_idx[-top_n:]
 
-    plt.figure(figsize=(12, 8))
+    fig = plt.figure(figsize=(12, 8))
     plt.barh(range(len(sorted_idx)), feature_importances[sorted_idx], align="center")
     plt.yticks(range(len(sorted_idx)), [feature_names[i] for i in sorted_idx])
     plt.xlabel("Feature Importance")
     plt.title("XGBoost Feature Importance")
     plt.tight_layout()
+    save_figure(fig, FIGURE_DIR, f"{FIGURE_BASENAME}_feature_importance.png")
     plt.show()
 
 # %%
@@ -413,6 +418,18 @@ def save_model(model, model_dir, filename):
     path = model_dir / filename
     booster = model.get_booster()
     booster.save_model(str(path))
+    print(f"Saved: {path}")
+
+# %%
+def save_figure(fig, figure_dir, filename):
+    """
+    Save figure
+    """
+
+    figure_dir = Path(figure_dir)
+    figure_dir.mkdir(parents=True, exist_ok=True)
+    path = figure_dir / filename
+    fig.savefig(path, bbox_inches="tight")
     print(f"Saved: {path}")
 
 

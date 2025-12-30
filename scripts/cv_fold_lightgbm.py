@@ -42,6 +42,9 @@ SAVE_MODEL = True
 MODEL_DIR = "../models"
 MODEL_FILENAME = "lightgbm_optuna_model.txt"
 
+FIGURE_DIR = "../figures"
+FIGURE_BASENAME = "cv_fold_lightgbm"
+
 TRAIN_PATH = "../data/raw/playground-series-s5e12/train.csv"
 TEST_PATH = "../data/raw/playground-series-s5e12/test.csv"
 
@@ -75,6 +78,9 @@ def load_data(train_path, test_path):
 
 # %%
 def feature_engineering(df):
+    """
+    easily available medical metrics that captures non-linearity
+    """
     eps = 1e-6
     df = df.copy()
     df["pulse_pressure"] = df["systolic_bp"] - df["diastolic_bp"]
@@ -93,6 +99,9 @@ def split_features_target(df, target, id_column):
 
 # %%
 def load_lgbm_params(path):
+    """
+    Load LGBM parameters based on optuna search results
+    """
     with open(path, "r", encoding="utf-8") as f:
         params = json.load(f)
     missing = [k for k in LGBM_REQUIRED_KEYS if k not in params]
@@ -103,6 +112,11 @@ def load_lgbm_params(path):
 
 # %%
 def build_model(seed, params):
+
+    """
+    Build a LightGBM model based on the parameters
+    """
+
     return LGBMClassifier(
         objective="binary",
         n_estimators=params["LGBM_N_ESTIMATORS"],
@@ -121,6 +135,11 @@ def build_model(seed, params):
 
 # %%
 def collect_lgbm_logs(evals_result, fold_idx):
+
+    """
+    Collect the logs from the model, used to plot logloss and auc curves later
+    """
+
     records = []
     split_map = {
         "train": "train",
@@ -152,6 +171,11 @@ def collect_lgbm_logs(evals_result, fold_idx):
 
 # %%
 def get_lgbm_best_iteration(model, evals_result):
+
+    """
+    store best iteration from model for later plotting and evaluation
+    """
+
     best_iteration = getattr(model, "best_iteration_", None)
     if best_iteration is not None and best_iteration > 0:
         return int(best_iteration)
@@ -163,6 +187,11 @@ def get_lgbm_best_iteration(model, evals_result):
 
 # %%
 def get_lgbm_best_metrics(evals_result, best_iteration):
+
+    """
+    store stats corresponding to best iteration from model for later plotting and evaluation
+    """
+
     if best_iteration is None:
         return None, None
     idx = best_iteration - 1
@@ -176,13 +205,21 @@ def get_lgbm_best_metrics(evals_result, best_iteration):
 # %%
 def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_verbose, model_params):
 
+    """
+    Main training loop
+    """
+
+    # split data into features and target
     X_total, y_total = split_features_target(df_train_total, target, id_column)
+
+    # stratified k-fold cross validation (because target is imbalanced)
     skf = StratifiedKFold(
         n_splits=n_folds,
         shuffle=True,
         random_state=seed,
     )
 
+    # initialize variables
     fold_eval_results = []
     models = []
     feature_names_per_fold = []
@@ -191,8 +228,10 @@ def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_ver
     log_records = []
     best_records = []
 
+    # iterate over folds
     for fold_idx, (train_index, val_index) in enumerate(skf.split(X_total, y_total), start=1):
 
+        # get train and validation data ready
         df_train = df_train_total.iloc[train_index]
         df_val = df_train_total.iloc[val_index]
 
@@ -204,20 +243,25 @@ def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_ver
 
         X_test = df_test.drop(columns=[id_column]).copy()
 
-        # LightGBM: use native categorical handling by setting dtype=category
+        # use native categorical handling 
         for c in CAT_COLS:
             if c in X_train.columns:
                 X_train[c] = X_train[c].astype("category")
                 X_val[c] = X_val[c].astype("category")
                 X_test[c] = X_test[c].astype("category")
 
+        # build model
         model = build_model(seed, model_params)
+
+        # add early stopping and logging callbacks
         callbacks = [
             __import__("lightgbm").early_stopping(
                 stopping_rounds=LGBM_EARLY_STOPPING_ROUNDS,
                 verbose=False,
             ),
         ]
+
+        # add logging callback if verbose
         if eval_verbose and eval_verbose > 0:
             callbacks.append(__import__("lightgbm").log_evaluation(period=eval_verbose))
         model.fit(
@@ -230,10 +274,14 @@ def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_ver
             callbacks=callbacks,
         )
 
+        # predict validation data
         y_val_pred = model.predict_proba(X_val)[:, 1]
+
+        # calculate validation auc
         val_auc = roc_auc_score(y_val, y_val_pred)
         print(f"Fold {fold_idx} Validation AUC: {val_auc:.4f}")
 
+        # store evaluation results
         evals_result = model.evals_result_
         fold_eval_results.append(evals_result)
         log_records.extend(collect_lgbm_logs(evals_result, fold_idx))
@@ -249,7 +297,10 @@ def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_ver
                     "best_val_logloss": best_val_logloss,
                 }
             )
+
+        # store model
         models.append(model)
+
         feature_names_per_fold.append(X_train.columns.tolist())
         test_pred_folds.append(model.predict_proba(X_test)[:, 1])
         val_scores.append(val_auc)
@@ -272,7 +323,6 @@ def plot_auc_curves(fold_eval_results):
         "training": {"auc": [...], "binary_logloss": [...]},
         "valid_0": {"auc": [...], "binary_logloss": [...]}
       }
-    This plots per-iteration curves for BOTH binary_logloss and auc on the validation set.
     """
     def _pick(metrics_dict, candidates):
         for k in candidates:
@@ -298,7 +348,7 @@ def plot_auc_curves(fold_eval_results):
     plt.show()
 
     # AUC
-    plt.figure(figsize=(10, 6))
+    fig = plt.figure(figsize=(10, 6))
     for fold_idx, evals_result in enumerate(fold_eval_results, start=1):
         val_dict = evals_result.get("valid_0", {})
         auc_key = _pick(val_dict, ["auc"])
@@ -312,6 +362,7 @@ def plot_auc_curves(fold_eval_results):
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
+    save_figure(fig, FIGURE_DIR, f"{FIGURE_BASENAME}_auc.png")
     plt.show()
 
 # %%
@@ -333,16 +384,22 @@ def plot_feature_importance(model, feature_names, top_n):
 
     sorted_idx_plot = sorted_idx[::-1]
 
-    plt.figure(figsize=(12, 8))
+    fig = plt.figure(figsize=(12, 8))
     plt.barh(range(len(sorted_idx_plot)), feature_importances[sorted_idx_plot], align="center")
     plt.yticks(range(len(sorted_idx_plot)), [feature_names[i] for i in sorted_idx_plot])
     plt.xlabel("Feature Importance")
     plt.title("LightGBM Feature Importance")
     plt.tight_layout()
+    save_figure(fig, FIGURE_DIR, f"{FIGURE_BASENAME}_feature_importance.png")
     plt.show()
 
 # %%
 def save_submission(df_test, y_pred, id_column, target, submission_dir, submission_prefix, submission_tag):
+
+    """
+    Save submission csv file
+    """
+
     submission_dir = Path(submission_dir)
     submission_dir.mkdir(parents=True, exist_ok=True)
 
@@ -362,6 +419,10 @@ def save_submission(df_test, y_pred, id_column, target, submission_dir, submissi
 
 # %%
 def save_model(model, model_dir, filename):
+    """
+    Save model
+    """
+
     model_dir = Path(model_dir)
     model_dir.mkdir(parents=True, exist_ok=True)
     path = model_dir / filename
@@ -369,7 +430,24 @@ def save_model(model, model_dir, filename):
     print(f"Saved: {path}")
 
 # %%
+def save_figure(fig, figure_dir, filename):
+    """
+    Save figure
+    """
+
+    figure_dir = Path(figure_dir)
+    figure_dir.mkdir(parents=True, exist_ok=True)
+    path = figure_dir / filename
+    fig.savefig(path, bbox_inches="tight")
+    print(f"Saved: {path}")
+
+# %%
 def save_logs(log_records, best_records, log_dir, log_basename):
+
+    """
+    Save logs for later analysis
+    """
+
     log_dir = Path(log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
     if log_records:
@@ -382,61 +460,58 @@ def save_logs(log_records, best_records, log_dir, log_basename):
         best_df.to_csv(log_dir / f"{log_basename}_summary_stats.csv", index=False)
 
 # %%
-def main():
-    df_train_total, df_test = load_data(TRAIN_PATH, TEST_PATH)
-    df_train_total = feature_engineering(df_train_total)
-    df_test = feature_engineering(df_test)
 
-    model_params = load_lgbm_params(LGBM_PARAMS_PATH)
-    cv_results = train_cv(
-        df_train_total,
-        df_test,
-        SEED,
-        N_FOLDS,
-        TARGET,
-        ID_COLUMN,
-        LGBM_LOG_EVAL_PERIOD,
-        model_params,
+df_train_total, df_test = load_data(TRAIN_PATH, TEST_PATH)
+df_train_total = feature_engineering(df_train_total)
+df_test = feature_engineering(df_test)
+
+model_params = load_lgbm_params(LGBM_PARAMS_PATH)
+cv_results = train_cv(
+    df_train_total,
+    df_test,
+    SEED,
+    N_FOLDS,
+    TARGET,
+    ID_COLUMN,
+    LGBM_LOG_EVAL_PERIOD,
+    model_params,
+)
+
+if PLOT_AUC_CURVES:
+    plot_auc_curves(cv_results["fold_eval_results"])
+
+if PLOT_FEATURE_IMPORTANCE:
+    plot_feature_importance(
+        cv_results["models"][-1],
+        cv_results["feature_names_per_fold"][-1],
+        TOP_N_IMPORTANCE,
     )
 
-    if PLOT_AUC_CURVES:
-        plot_auc_curves(cv_results["fold_eval_results"])
+if SAVE_LOGS:
+    save_logs(
+        cv_results["log_records"],
+        cv_results["best_records"],
+        LOG_DIR,
+        LOG_BASENAME,
+    )
 
-    if PLOT_FEATURE_IMPORTANCE:
-        plot_feature_importance(
-            cv_results["models"][-1],
-            cv_results["feature_names_per_fold"][-1],
-            TOP_N_IMPORTANCE,
-        )
+if SAVE_MODEL:
+    save_model(
+        cv_results["models"][-1],
+        MODEL_DIR,
+        MODEL_FILENAME,
+    )
 
-    if SAVE_LOGS:
-        save_logs(
-            cv_results["log_records"],
-            cv_results["best_records"],
-            LOG_DIR,
-            LOG_BASENAME,
-        )
-
-    if SAVE_MODEL:
-        save_model(
-            cv_results["models"][-1],
-            MODEL_DIR,
-            MODEL_FILENAME,
-        )
-
-    if SAVE_SUBMISSION:
-        y_test_pred = np.mean(np.vstack(cv_results["test_pred_folds"]), axis=0)
-        save_submission(
-            df_test,
-            y_test_pred,
-            ID_COLUMN,
-            TARGET,
-            SUBMISSION_DIR,
-            SUBMISSION_PREFIX,
-            SUBMISSION_TAG,
-        )
-
-if __name__ == "__main__":
-    main()
+if SAVE_SUBMISSION:
+    y_test_pred = np.mean(np.vstack(cv_results["test_pred_folds"]), axis=0)
+    save_submission(
+        df_test,
+        y_test_pred,
+        ID_COLUMN,
+        TARGET,
+        SUBMISSION_DIR,
+        SUBMISSION_PREFIX,
+        SUBMISSION_TAG,
+    )
 
 # %%
