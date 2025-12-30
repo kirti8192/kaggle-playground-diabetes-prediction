@@ -31,6 +31,14 @@ PLOT_FEATURE_IMPORTANCE = False
 SAVE_SUBMISSION = True
 EVAL_VERBOSE = 100
 
+SAVE_LOGS = True
+LOG_DIR = "../logs"
+LOG_BASENAME = "cv_fold_xgboost"
+
+SAVE_MODEL = True
+MODEL_DIR = "../models"
+MODEL_FILENAME = "xgboost_optuna.json"
+
 ORDINAL_COLS = [
     "education_level",
     "income_level",
@@ -47,10 +55,10 @@ OHE_COLS = [
     "employment_status",
 ]
 
-XGB_PARAMS_PATH = "../parameters/xgb_params.json"
+XGB_PARAMS_PATH = "../parameters/xgb_optuna.json"
 
 XGB_OBJECTIVE = "binary:logistic"
-XGB_EVAL_METRIC = "logloss"
+XGB_EVAL_METRIC = ["logloss", "auc"]
 XGB_TREE_METHOD = "hist"
 XGB_EARLY_STOPPING_ROUNDS = 100
 
@@ -142,6 +150,62 @@ def build_model(seed, params):
     )
 
 # %%
+def collect_xgb_logs(evals_result, fold_idx):
+    records = []
+    split_map = {
+        "validation_0": "train",
+        "validation_1": "val",
+    }
+    metric_map = {
+        "logloss": "logloss",
+        "auc": "auc",
+    }
+    for split_key, split_label in split_map.items():
+        if split_key not in evals_result:
+            continue
+        for metric_key, metric_label in metric_map.items():
+            values = evals_result[split_key].get(metric_key)
+            if values is None:
+                continue
+            for iteration, value in enumerate(values, start=1):
+                records.append(
+                    {
+                        "model": "xgboost",
+                        "fold": fold_idx,
+                        "iteration": iteration,
+                        "split": split_label,
+                        "metric": metric_label,
+                        "value": value,
+                    }
+                )
+    return records
+
+# %%
+def get_xgb_best_iteration(model, evals_result):
+    best_iteration = getattr(model, "best_iteration", None)
+    if best_iteration is None:
+        best_iteration = getattr(model, "best_iteration_", None)
+    if best_iteration is not None and best_iteration >= 0:
+        return int(best_iteration) + 1
+    val_metrics = evals_result.get("validation_1", {})
+    values = val_metrics.get("auc") or val_metrics.get("logloss")
+    if values:
+        return len(values)
+    return None
+
+# %%
+def get_xgb_best_metrics(evals_result, best_iteration):
+    if best_iteration is None:
+        return None, None
+    idx = best_iteration - 1
+    val_metrics = evals_result.get("validation_1", {})
+    auc_values = val_metrics.get("auc")
+    logloss_values = val_metrics.get("logloss")
+    best_val_auc = auc_values[idx] if auc_values and idx < len(auc_values) else None
+    best_val_logloss = logloss_values[idx] if logloss_values and idx < len(logloss_values) else None
+    return best_val_auc, best_val_logloss
+
+# %%
 def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_verbose, model_params):
 
     X_total, y_total = split_features_target(df_train_total, target, id_column)
@@ -156,6 +220,8 @@ def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_ver
     feature_names_per_fold = []
     test_pred_folds = []
     val_scores = []
+    log_records = []
+    best_records = []
 
     for fold_idx, (train_index, val_index) in enumerate(skf.split(X_total, y_total), start=1):
         df_train = df_train_total.iloc[train_index]
@@ -177,7 +243,7 @@ def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_ver
         model.fit(
             X_train_arr,
             y_train,
-            eval_set=[(X_val_arr, y_val)],
+            eval_set=[(X_train_arr, y_train), (X_val_arr, y_val)],
             verbose=eval_verbose,
         )
 
@@ -185,7 +251,21 @@ def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_ver
         val_auc = roc_auc_score(y_val, y_val_pred)
         print(f"Fold {fold_idx} Validation AUC: {val_auc:.4f}")
 
-        fold_eval_results.append(model.evals_result())
+        evals_result = model.evals_result()
+        fold_eval_results.append(evals_result)
+        log_records.extend(collect_xgb_logs(evals_result, fold_idx))
+        best_iteration = get_xgb_best_iteration(model, evals_result)
+        best_val_auc, best_val_logloss = get_xgb_best_metrics(evals_result, best_iteration)
+        if best_iteration is not None:
+            best_records.append(
+                {
+                    "model": "xgboost",
+                    "fold": fold_idx,
+                    "best_iteration": best_iteration,
+                    "best_val_auc": best_val_auc,
+                    "best_val_logloss": best_val_logloss,
+                }
+            )
         models.append(model)
         feature_names_per_fold.append(feature_names)
         test_pred_folds.append(model.predict_proba(X_test_arr)[:, 1])
@@ -197,6 +277,8 @@ def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_ver
         "fold_eval_results": fold_eval_results,
         "test_pred_folds": test_pred_folds,
         "val_scores": val_scores,
+        "log_records": log_records,
+        "best_records": best_records,
     }
 
 # %%
@@ -255,6 +337,27 @@ def save_submission(df_test, y_pred, id_column, target, submission_dir, submissi
     print(f"Saved: {path}")
 
 # %%
+def save_model(model, model_dir, filename):
+    model_dir = Path(model_dir)
+    model_dir.mkdir(parents=True, exist_ok=True)
+    path = model_dir / filename
+    model.save_model(str(path))
+    print(f"Saved: {path}")
+
+# %%
+def save_logs(log_records, best_records, log_dir, log_basename):
+    log_dir = Path(log_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    if log_records:
+        log_df = pd.DataFrame(log_records)
+        log_df = log_df[["model", "fold", "iteration", "split", "metric", "value"]]
+        log_df.to_csv(log_dir / f"{log_basename}.csv", index=False)
+    if best_records:
+        best_df = pd.DataFrame(best_records)
+        best_df = best_df[["model", "fold", "best_iteration", "best_val_auc", "best_val_logloss"]]
+        best_df.to_csv(log_dir / f"{log_basename}_summary.csv", index=False)
+
+# %%
 def main():
     df_train_total, df_test = load_data(TRAIN_PATH, TEST_PATH)
     df_train_total = feature_engineering(df_train_total)
@@ -280,6 +383,21 @@ def main():
             cv_results["models"][-1],
             cv_results["feature_names_per_fold"][-1],
             TOP_N_IMPORTANCE,
+        )
+
+    if SAVE_LOGS:
+        save_logs(
+            cv_results["log_records"],
+            cv_results["best_records"],
+            LOG_DIR,
+            LOG_BASENAME,
+        )
+
+    if SAVE_MODEL:
+        save_model(
+            cv_results["models"][-1],
+            MODEL_DIR,
+            MODEL_FILENAME,
         )
 
     if SAVE_SUBMISSION:
