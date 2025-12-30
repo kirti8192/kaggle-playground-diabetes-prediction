@@ -42,6 +42,11 @@ MODEL_FILENAME = "xgboost_optuna_model.json"
 FIGURE_DIR = "../figures"
 FIGURE_BASENAME = "cv_fold_xgboost"
 
+SAVE_PREDICTIONS = True
+PRED_DIR = "../predictions"
+MODEL_NAME = "xgboost"
+FOLDS_FILENAME = "folds.csv"
+
 ORDINAL_COLS = [
     "education_level",
     "income_level",
@@ -266,6 +271,8 @@ def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_ver
     val_scores = []
     log_records = []
     best_records = []
+    oof_pred = np.full(len(df_train_total), np.nan)
+    fold_assignments = np.zeros(len(df_train_total), dtype=int)
 
     # iterate over folds
     for fold_idx, (train_index, val_index) in enumerate(skf.split(X_total, y_total), start=1):
@@ -302,6 +309,9 @@ def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_ver
         val_auc = roc_auc_score(y_val, y_val_pred)
         print(f"Fold {fold_idx} Validation AUC: {val_auc:.4f}")
 
+        oof_pred[val_index] = y_val_pred
+        fold_assignments[val_index] = fold_idx
+
         # store evaluation results
         evals_result = model.evals_result()
         fold_eval_results.append(evals_result)
@@ -334,6 +344,8 @@ def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_ver
         "val_scores": val_scores,
         "log_records": log_records,
         "best_records": best_records,
+        "oof_pred": oof_pred,
+        "fold_assignments": fold_assignments,
     }
 
 # %%
@@ -452,6 +464,91 @@ def save_logs(log_records, best_records, log_dir, log_basename):
         best_df.to_csv(log_dir / f"{log_basename}_summary_stats.csv", index=False)
 
 # %%
+def save_oof_predictions(df_train_total, oof_pred, target, id_column, pred_dir, model_name):
+    pred_dir = Path(pred_dir)
+    pred_dir.mkdir(parents=True, exist_ok=True)
+    path = pred_dir / f"oof_{model_name}.csv"
+    oof_df = pd.DataFrame(
+        {
+            id_column: df_train_total[id_column],
+            "y_true": df_train_total[target].astype(int),
+            "oof_pred": oof_pred,
+        }
+    )
+    oof_df.to_csv(path, index=False)
+    print(f"Saved: {path}")
+    return str(path)
+
+# %%
+def save_test_predictions(df_test, test_pred, id_column, pred_dir, model_name):
+    pred_dir = Path(pred_dir)
+    pred_dir.mkdir(parents=True, exist_ok=True)
+    path = pred_dir / f"test_{model_name}.csv"
+    test_df = pd.DataFrame(
+        {
+            id_column: df_test[id_column],
+            "test_pred": test_pred,
+        }
+    )
+    test_df.to_csv(path, index=False)
+    print(f"Saved: {path}")
+    return str(path)
+
+# %%
+def save_fold_assignments(df_train_total, fold_assignments, id_column, pred_dir, filename):
+    pred_dir = Path(pred_dir)
+    pred_dir.mkdir(parents=True, exist_ok=True)
+    path = pred_dir / filename
+    folds_df = pd.DataFrame(
+        {
+            id_column: df_train_total[id_column],
+            "fold": fold_assignments,
+        }
+    )
+    folds_df.to_csv(path, index=False)
+    print(f"Saved: {path}")
+    return str(path)
+
+# %%
+def save_run_manifest(
+    model_name,
+    seed,
+    n_folds,
+    target,
+    id_column,
+    feature_list,
+    categorical_cols,
+    params,
+    cv_auc_mean,
+    cv_auc_std,
+    oof_path,
+    test_pred_path,
+    pred_dir,
+):
+    pred_dir = Path(pred_dir)
+    pred_dir.mkdir(parents=True, exist_ok=True)
+    path = pred_dir / f"run_{model_name}.json"
+    manifest = {
+        "model": model_name,
+        "timestamp": datetime.now().isoformat(),
+        "seed": seed,
+        "n_folds": n_folds,
+        "target": target,
+        "id_column": id_column,
+        "feature_list": feature_list,
+        "categorical_cols": categorical_cols,
+        "params": params,
+        "cv_auc_mean": cv_auc_mean,
+        "cv_auc_std": cv_auc_std,
+        "oof_path": oof_path,
+        "test_pred_path": test_pred_path,
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+    print(f"Saved: {path}")
+    return str(path)
+
+# %%
 
 df_train_total, df_test = load_data(TRAIN_PATH, TEST_PATH)
 df_train_total = feature_engineering(df_train_total)
@@ -494,8 +591,58 @@ if SAVE_MODEL:
         MODEL_FILENAME,
     )
 
-if SAVE_SUBMISSION:
+if SAVE_PREDICTIONS or SAVE_SUBMISSION:
     y_test_pred = np.mean(np.vstack(cv_results["test_pred_folds"]), axis=0)
+
+if SAVE_PREDICTIONS:
+    oof_path = save_oof_predictions(
+        df_train_total,
+        cv_results["oof_pred"],
+        TARGET,
+        ID_COLUMN,
+        PRED_DIR,
+        MODEL_NAME,
+    )
+    test_path = save_test_predictions(
+        df_test,
+        y_test_pred,
+        ID_COLUMN,
+        PRED_DIR,
+        MODEL_NAME,
+    )
+    save_fold_assignments(
+        df_train_total,
+        cv_results["fold_assignments"],
+        ID_COLUMN,
+        PRED_DIR,
+        FOLDS_FILENAME,
+    )
+    final_params = dict(model_params)
+    final_params.update(
+        {
+            "objective": XGB_OBJECTIVE,
+            "eval_metric": XGB_EVAL_METRIC,
+            "tree_method": XGB_TREE_METHOD,
+            "early_stopping_rounds": XGB_EARLY_STOPPING_ROUNDS,
+        }
+    )
+    save_run_manifest(
+        MODEL_NAME,
+        SEED,
+        N_FOLDS,
+        TARGET,
+        ID_COLUMN,
+        cv_results["feature_names_per_fold"][-1],
+        list(dict.fromkeys(ORDINAL_COLS + OHE_COLS)),
+        final_params,
+        float(np.mean(cv_results["val_scores"])),
+        float(np.std(cv_results["val_scores"])),
+        oof_path,
+        test_path,
+        PRED_DIR,
+    )
+
+if SAVE_SUBMISSION:
     save_submission(
         df_test,
         y_test_pred,
