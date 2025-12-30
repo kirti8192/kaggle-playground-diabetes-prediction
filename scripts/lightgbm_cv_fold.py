@@ -1,5 +1,6 @@
 # %%
 from datetime import datetime
+import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -40,27 +41,23 @@ SUBMISSION_DIR = "../submissions"
 SUBMISSION_PREFIX = "submission"
 SUBMISSION_TAG = "lgbm_cv"
 
-# Optuna best params: 
-# {'n_estimators': 4890, 'learning_rate': 0.12511547004171678, 'num_leaves': 24, 
-# 'max_depth': 2, 'min_child_samples': 134, 'subsample': 0.9624457541570358, 
-# 'colsample_bytree': 0.9506589893038976, 'reg_alpha': 2.51545560767482, 
-# 'reg_lambda': 4.83334465226836}
-
-# LightGBM params (baseline; tune later)
-LGBM_N_ESTIMATORS = 4890
-LGBM_LEARNING_RATE = 0.12511547004171678
-LGBM_NUM_LEAVES = 24
-LGBM_MAX_DEPTH = 2
-LGBM_MIN_CHILD_SAMPLES = 134
-LGBM_SUBSAMPLE = 0.9624457541570358
-LGBM_COLSAMPLE_BYTREE = 0.9506589893038976
-LGBM_REG_ALPHA = 2.51545560767482
-LGBM_REG_LAMBDA = 4.83334465226836
+LGBM_PARAMS_PATH = "../parameters/lightgbm_params.json"
 
 LGBM_EARLY_STOPPING_ROUNDS = 200
 LGBM_LOG_EVAL_PERIOD = 0  # set >0 to log every N rounds
 LGBM_VERBOSITY = -1
 
+LGBM_REQUIRED_KEYS = [
+    "LGBM_N_ESTIMATORS",
+    "LGBM_LEARNING_RATE",
+    "LGBM_NUM_LEAVES",
+    "LGBM_MAX_DEPTH",
+    "LGBM_MIN_CHILD_SAMPLES",
+    "LGBM_SUBSAMPLE",
+    "LGBM_COLSAMPLE_BYTREE",
+    "LGBM_REG_ALPHA",
+    "LGBM_REG_LAMBDA",
+]
 
 # %%
 def load_data(train_path, test_path):
@@ -87,25 +84,35 @@ def split_features_target(df, target, id_column):
     return X, y
 
 # %%
-def build_model(seed):
+def load_lgbm_params(path):
+    with open(path, "r", encoding="utf-8") as f:
+        params = json.load(f)
+    missing = [k for k in LGBM_REQUIRED_KEYS if k not in params]
+    if missing:
+        missing_str = ", ".join(missing)
+        raise KeyError(f"Missing keys in {path}: {missing_str}")
+    return params
+
+# %%
+def build_model(seed, params):
     return LGBMClassifier(
         objective="binary",
-        n_estimators=LGBM_N_ESTIMATORS,
-        learning_rate=LGBM_LEARNING_RATE,
-        num_leaves=LGBM_NUM_LEAVES,
-        max_depth=LGBM_MAX_DEPTH,
-        min_child_samples=LGBM_MIN_CHILD_SAMPLES,
-        subsample=LGBM_SUBSAMPLE,
-        colsample_bytree=LGBM_COLSAMPLE_BYTREE,
-        reg_alpha=LGBM_REG_ALPHA,
-        reg_lambda=LGBM_REG_LAMBDA,
+        n_estimators=params["LGBM_N_ESTIMATORS"],
+        learning_rate=params["LGBM_LEARNING_RATE"],
+        num_leaves=params["LGBM_NUM_LEAVES"],
+        max_depth=params["LGBM_MAX_DEPTH"],
+        min_child_samples=params["LGBM_MIN_CHILD_SAMPLES"],
+        subsample=params["LGBM_SUBSAMPLE"],
+        colsample_bytree=params["LGBM_COLSAMPLE_BYTREE"],
+        reg_alpha=params["LGBM_REG_ALPHA"],
+        reg_lambda=params["LGBM_REG_LAMBDA"],
         random_state=seed,
         n_jobs=-1,
         verbosity=LGBM_VERBOSITY,
     )
 
 # %%
-def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_verbose):
+def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_verbose, model_params):
 
     X_total, y_total = split_features_target(df_train_total, target, id_column)
     skf = StratifiedKFold(
@@ -140,7 +147,7 @@ def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_ver
                 X_val[c] = X_val[c].astype("category")
                 X_test[c] = X_test[c].astype("category")
 
-        model = build_model(seed)
+        model = build_model(seed, model_params)
         callbacks = [
             __import__("lightgbm").early_stopping(
                 stopping_rounds=LGBM_EARLY_STOPPING_ROUNDS,
@@ -278,6 +285,7 @@ def main():
     df_train_total = feature_engineering(df_train_total)
     df_test = feature_engineering(df_test)
 
+    model_params = load_lgbm_params(LGBM_PARAMS_PATH)
     cv_results = train_cv(
         df_train_total,
         df_test,
@@ -286,6 +294,7 @@ def main():
         TARGET,
         ID_COLUMN,
         LGBM_LOG_EVAL_PERIOD,
+        model_params,
     )
 
     if PLOT_AUC_CURVES:

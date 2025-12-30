@@ -3,11 +3,13 @@
 ## Problem and Metric
 This project predicts whether a patient is diagnosed with diabetes based on tabular clinical and demographic features. It is a binary classification task evaluated with ROC-AUC, which is appropriate under class imbalance and avoids committing to a fixed decision threshold.
 
+Challenge URL: https://www.kaggle.com/competitions/playground-series-s5e12/overview/abstract
+
 ## Data Summary (Modeling-Relevant Only)
 The training set has 700,000 rows and 26 columns (including `id` and the target), and the test set has 300,000 rows and 25 columns. Features are a mix of numerical and categorical variables, with no missing values. These properties favor tree-based models that can handle heterogeneous feature types and large sample sizes efficiently.
 
 ## Feature Engineering (Motivation and Scope)
-I added a small set of ratio and interaction features grounded in clinical intuition, all derived from routinely available measurements:
+A small set of ratio and interaction features was added based on clinical intuition and derived from routinely available measurements:
 - Pulse pressure: systolic minus diastolic blood pressure.
 - Non-HDL cholesterol: total cholesterol minus HDL.
 - LDL/HDL ratio.
@@ -15,26 +17,22 @@ I added a small set of ratio and interaction features grounded in clinical intui
 - Total cholesterol/HDL ratio.
 - Physical activity minutes per week divided by BMI.
 
-These are well-known clinical metrics and easy to obtain; I included them because they encode non-linear relationships already implicit in the raw inputs. I avoided broad feature expansion to keep the model stable, interpretable, and computationally reasonable given the dataset size.
+These are well-known clinical metrics and easy to obtain; they were included because they encode non-linear relationships already implicit in the raw inputs. Broad feature expansion was avoided to keep the model stable, interpretable, and computationally reasonable given the dataset size.
 
 ## Model Selection Rationale
-CatBoost and LightGBM were chosen because they natively handle categorical features and scale well to large tabular datasets. Earlier experiments with ordinal and one-hot encoding introduced artificial orderings or high-dimensional sparse features, which can degrade performance or increase training cost without clear gains. In particular, ordinal encoding for XGBoost imposed a ranking on categories (e.g., education or smoking status) that is not inherently ordered with respect to diabetes probability, so the encoding was not meaningful. Native categorical handling produced a simpler pipeline with more stable validation behavior.
+CatBoost and LightGBM were chosen because they natively handle categorical features and scale well to large tabular datasets. Earlier experiments with ordinal and one-hot encoding introduced artificial orderings or high-dimensional sparse features, which can degrade performance or increase training cost without clear gains. In particular, ordinal encoding for XGBoost imposed a ranking on categories (e.g., education level) that is not inherently ordered with respect to diabetes probability, so the encoding was not meaningful. Native categorical handling produced a simpler pipeline with more stable validation behavior.
 
 ## Cross-Validation Strategy
-I used stratified K-fold cross-validation to preserve class proportions across folds and obtain reliable generalization estimates. Out-of-fold (OOF) predictions were generated for each model; these are required to evaluate blends without bias. Using OOF predictions for ensembling prevents leakage that would otherwise inflate performance if the ensemble weights were tuned on in-fold predictions.
+Stratified K-fold cross-validation was used to preserve class proportions across folds and obtain reliable generalization estimates. Out-of-fold (OOF) predictions were generated for each model; these are required to evaluate blends without bias. Using OOF predictions for ensembling prevents leakage that would otherwise inflate performance if the ensemble weights were tuned on in-fold predictions.
 
 ## Hyperparameter Tuning
-Optuna was used with a constrained search space after feature engineering stabilized. Tuning was run in Kaggle notebooks for convenience and reproducibility. This kept the search focused on meaningful trade-offs (e.g., tree complexity, regularization) without overfitting to noisy hyperparameter combinations. I avoided exhaustive searches and relied on early stopping to manage runtime.
+Optuna was used with a constrained search space after feature engineering stabilized. Tuning was run in Kaggle notebooks for convenience and reproducibility. This kept the search focused on meaningful trade-offs (e.g., tree complexity, regularization) without overfitting to noisy hyperparameter combinations. Exhaustive searches were avoided and early stopping was used to manage runtime.
 
 ## Ensemble Method
 The final ensemble is a linear blend of CatBoost and LightGBM probability outputs. Blend weights were selected using OOF ROC-AUC rather than any leaderboard feedback. The motivation is error diversity: each model makes different mistakes, and a calibrated blend tends to reduce variance and smooth model-specific failure modes. Because the weights are fit on OOF predictions, the blend is less likely to overfit and is expected to generalize better than selecting a single model based on a single split.
 
 ## Figures and Diagnostics
-Include only figures that inform decisions or validate assumptions:
-- CatBoost validation AUC and logloss curves across folds (training stability).
-- LightGBM validation AUC and logloss curves across folds (training stability).
-- Comparative plot of per-fold AUC for CatBoost vs LightGBM (consistency and variance).
-- Optional: top-N feature importance from each model to confirm that engineered ratios are used.
+Figures will be specified later.
 
 ## Learnings
 What worked:

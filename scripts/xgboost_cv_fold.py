@@ -1,5 +1,6 @@
 # %%
 from datetime import datetime
+import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -46,19 +47,24 @@ OHE_COLS = [
     "employment_status",
 ]
 
+XGB_PARAMS_PATH = "../parameters/xgb_params.json"
+
 XGB_OBJECTIVE = "binary:logistic"
 XGB_EVAL_METRIC = "logloss"
-XGB_MAX_DEPTH = 4
-XGB_MIN_CHILD_WEIGHT = 3
-XGB_GAMMA = 0
-XGB_N_ESTIMATORS = 500
-XGB_LEARNING_RATE = 0.1
-XGB_SUBSAMPLE = 0.8
-XGB_COLSAMPLE_BYTREE = 0.8
-XGB_REG_LAMBDA = 1.0
-XGB_REG_ALPHA = 0.0
 XGB_TREE_METHOD = "hist"
 XGB_EARLY_STOPPING_ROUNDS = 100
+
+XGB_REQUIRED_KEYS = [
+    "XGB_N_ESTIMATORS",
+    "XGB_LEARNING_RATE",
+    "XGB_MAX_DEPTH",
+    "XGB_MIN_CHILD_WEIGHT",
+    "XGB_SUBSAMPLE",
+    "XGB_COLSAMPLE_BYTREE",
+    "XGB_GAMMA",
+    "XGB_REG_ALPHA",
+    "XGB_REG_LAMBDA",
+]
 
 # %%
 def load_data(train_path, test_path):
@@ -107,26 +113,36 @@ def encode_fold(X_train, X_val, X_test, ordinal_cols, ordinal_categories, ohe_co
     return X_train_arr, X_val_arr, X_test_arr, feature_names
 
 # %%
-def build_model(seed):
+def load_xgb_params(path):
+    with open(path, "r", encoding="utf-8") as f:
+        params = json.load(f)
+    missing = [k for k in XGB_REQUIRED_KEYS if k not in params]
+    if missing:
+        missing_str = ", ".join(missing)
+        raise KeyError(f"Missing keys in {path}: {missing_str}")
+    return params
+
+# %%
+def build_model(seed, params):
     return XGBClassifier(
         objective=XGB_OBJECTIVE,
         eval_metric=XGB_EVAL_METRIC,
         random_state=seed,
-        max_depth=XGB_MAX_DEPTH,
-        min_child_weight=XGB_MIN_CHILD_WEIGHT,
-        gamma=XGB_GAMMA,
-        n_estimators=XGB_N_ESTIMATORS,
-        learning_rate=XGB_LEARNING_RATE,
-        subsample=XGB_SUBSAMPLE,
-        colsample_bytree=XGB_COLSAMPLE_BYTREE,
-        reg_lambda=XGB_REG_LAMBDA,
-        reg_alpha=XGB_REG_ALPHA,
+        max_depth=params["XGB_MAX_DEPTH"],
+        min_child_weight=params["XGB_MIN_CHILD_WEIGHT"],
+        gamma=params["XGB_GAMMA"],
+        n_estimators=params["XGB_N_ESTIMATORS"],
+        learning_rate=params["XGB_LEARNING_RATE"],
+        subsample=params["XGB_SUBSAMPLE"],
+        colsample_bytree=params["XGB_COLSAMPLE_BYTREE"],
+        reg_lambda=params["XGB_REG_LAMBDA"],
+        reg_alpha=params["XGB_REG_ALPHA"],
         tree_method=XGB_TREE_METHOD,
         early_stopping_rounds=XGB_EARLY_STOPPING_ROUNDS,
     )
 
 # %%
-def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_verbose):
+def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_verbose, model_params):
 
     X_total, y_total = split_features_target(df_train_total, target, id_column)
     skf = StratifiedKFold(
@@ -157,7 +173,7 @@ def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_ver
             X_train, X_val, X_test, ORDINAL_COLS, ORDINAL_CATEGORIES, OHE_COLS
         )
 
-        model = build_model(seed)
+        model = build_model(seed, model_params)
         model.fit(
             X_train_arr,
             y_train,
@@ -244,6 +260,7 @@ def main():
     df_train_total = feature_engineering(df_train_total)
     df_test = feature_engineering(df_test)
 
+    model_params = load_xgb_params(XGB_PARAMS_PATH)
     cv_results = train_cv(
         df_train_total,
         df_test,
@@ -252,6 +269,7 @@ def main():
         TARGET,
         ID_COLUMN,
         EVAL_VERBOSE,
+        model_params,
     )
 
     if PLOT_AUC_CURVES:

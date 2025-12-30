@@ -1,5 +1,6 @@
 # %%
 from datetime import datetime
+import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -38,24 +39,20 @@ CAT_COLS = [
     "employment_status",
 ]
 
-# optuna fine-tuned hyperparams
+CATBOOST_PARAMS_PATH = "../parameters/catboost_params.json"
 
-# Trial 27 finished with value: 0.7267291760703681 
-# parameters: {'iterations': 3838, 'learning_rate': 0.05359374417837557, 
-# 'depth': 5, 'l2_leaf_reg': 5.104333350702094, 'random_strength': 1.747464298900436, 
-# 'bagging_temperature': 0.5210398649951489, 'border_count': 254}. 
-# Best is trial 27 with value: 0.7267291760703681.
-
-CATBOOST_NUM_ITERATIONS = 3838
-CATBOOST_LEARNING_RATE = 0.05359374417837557
-CATBOOST_DEPTH = 5
-CATBOOST_EARLY_STOPPING_ROUNDS = 100
-CATBOOST_EVAL_METRIC = "AUC"
-CATBOOST_LOSS_FUNCTION = "Logloss"
-CATBOOST_L2_LEAF_REG = 5.104333350702094
-CATBOOST_RANDOM_STRENGTH = 1.747464298900436
-CATBOOST_BAGGING_TEMPERATURE = 0.5210398649951489
-CATBOOST_BORDER_COUNT = 254
+CATBOOST_REQUIRED_KEYS = [
+    "CATBOOST_NUM_ITERATIONS",
+    "CATBOOST_LEARNING_RATE",
+    "CATBOOST_DEPTH",
+    "CATBOOST_EARLY_STOPPING_ROUNDS",
+    "CATBOOST_EVAL_METRIC",
+    "CATBOOST_LOSS_FUNCTION",
+    "CATBOOST_L2_LEAF_REG",
+    "CATBOOST_RANDOM_STRENGTH",
+    "CATBOOST_BAGGING_TEMPERATURE",
+    "CATBOOST_BORDER_COUNT",
+]
 
 
 # %%
@@ -83,26 +80,35 @@ def split_features_target(df, target, id_column):
     return X, y
 
 # %%
-def build_model(seed):
+def load_catboost_params(path):
+    with open(path, "r", encoding="utf-8") as f:
+        params = json.load(f)
+    missing = [k for k in CATBOOST_REQUIRED_KEYS if k not in params]
+    if missing:
+        missing_str = ", ".join(missing)
+        raise KeyError(f"Missing keys in {path}: {missing_str}")
+    return params
 
+# %%
+def build_model(seed, params):
     return CatBoostClassifier(
-        iterations=CATBOOST_NUM_ITERATIONS,
-        learning_rate=CATBOOST_LEARNING_RATE,
-        depth=CATBOOST_DEPTH,
+        iterations=params["CATBOOST_NUM_ITERATIONS"],
+        learning_rate=params["CATBOOST_LEARNING_RATE"],
+        depth=params["CATBOOST_DEPTH"],
         random_seed=seed,
-        early_stopping_rounds=CATBOOST_EARLY_STOPPING_ROUNDS,
-        eval_metric=CATBOOST_EVAL_METRIC,
+        early_stopping_rounds=params["CATBOOST_EARLY_STOPPING_ROUNDS"],
+        eval_metric=params["CATBOOST_EVAL_METRIC"],
         verbose=True,
-        loss_function=CATBOOST_LOSS_FUNCTION,
-        l2_leaf_reg=CATBOOST_L2_LEAF_REG,
+        loss_function=params["CATBOOST_LOSS_FUNCTION"],
+        l2_leaf_reg=params["CATBOOST_L2_LEAF_REG"],
         allow_writing_files=False,
-        random_strength=CATBOOST_RANDOM_STRENGTH,
-        bagging_temperature=CATBOOST_BAGGING_TEMPERATURE,
-        border_count=CATBOOST_BORDER_COUNT,
+        random_strength=params["CATBOOST_RANDOM_STRENGTH"],
+        bagging_temperature=params["CATBOOST_BAGGING_TEMPERATURE"],
+        border_count=params["CATBOOST_BORDER_COUNT"],
     )
 
 # %%
-def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_verbose):
+def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_verbose, model_params):
 
     X_total, y_total = split_features_target(df_train_total, target, id_column)
     skf = StratifiedKFold(
@@ -133,7 +139,7 @@ def train_cv(df_train_total, df_test, seed, n_folds, target, id_column, eval_ver
         # get categorical feature indices for CatBoost
         cat_feature_indices = [X_train.columns.get_loc(col) for col in CAT_COLS if col in X_train.columns]
 
-        model = build_model(seed)
+        model = build_model(seed, model_params)
         model.fit(
             X_train,
             y_train,
@@ -274,6 +280,7 @@ def main():
     df_train_total = feature_engineering(df_train_total)
     df_test = feature_engineering(df_test)
 
+    model_params = load_catboost_params(CATBOOST_PARAMS_PATH)
     cv_results = train_cv(
         df_train_total,
         df_test,
@@ -282,6 +289,7 @@ def main():
         TARGET,
         ID_COLUMN,
         EVAL_VERBOSE,
+        model_params,
     )
 
     if PLOT_AUC_CURVES:
