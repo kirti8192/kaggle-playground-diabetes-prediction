@@ -8,49 +8,65 @@ The training set contains 700,000 rows and 26 columns (including `id` and the ta
 
 ## Feature Engineering (Motivation and Scope)
 A small set of ratio and interaction features was added based on routinely available measurements:
-- Pulse pressure: \( \text{systolic blood pressure} - \text{diastolic blood pressure} \)
-- Non-HDL cholesterol: \( \text{total cholesterol} - \text{HDL cholesterol} \)
-- LDL/HDL ratio: \( \frac{\text{LDL cholesterol}}{\text{HDL cholesterol}} \)
-- Triglycerides/HDL ratio: \( \frac{\text{triglycerides}}{\text{HDL cholesterol}} \)
-- Total cholesterol/HDL ratio: \( \frac{\text{total cholesterol}}{\text{HDL cholesterol}} \)
-- Physical activity minutes per week divided by BMI: \( \frac{\text{physical activity minutes/week}}{\text{BMI}} \)
+- Pulse pressure: systolic blood pressure − diastolic blood pressure
+- Non-HDL cholesterol: total cholesterol − HDL cholesterol
+- LDL/HDL ratio: LDL cholesterol / HDL cholesterol
+- Triglycerides/HDL ratio: triglycerides / HDL cholesterol
+- Total cholesterol/HDL ratio: total cholesterol / HDL cholesterol
+- Physical activity per BMI: physical activity minutes per week / BMI
 
-While tree-based models can learn non-linear relationships implicitly, explicitly including these carefully chosen features improves model stability and data efficiency.
+While tree-based models can learn non-linear relationships implicitly, including these carefully chosen features directly improves model stability and data efficiency.
 
 ## Model Selection Rationale
-XGBoost served as the baseline model but required categorical features to be encoded as either ordinal or one-hot, which imposes assumptions that may not hold, such as treating education level as ordinal when it is not strictly ordered for diabetes prediction. CatBoost and LightGBM were selected because they natively handle categorical features and scale efficiently to large tabular datasets. Native categorical handling simplifies the pipeline, avoids artificial orderings or sparse high-dimensional encodings, and yields more stable validation performance.
+XGBoost served as the baseline model but required categorical features to be encoded as either ordinal or one-hot, which imposes assumptions that may not hold, such as treating education level as ordinal when it is not strictly ordered for diabetes prediction. CatBoost and LightGBM were selected because they natively handle categorical features and scale efficiently to large tabular datasets. With their native categorical handling, the pipeline is simplified, artificial orderings or sparse high-dimensional encodings are avoided.
 
 ## Cross-Validation Strategy
-Stratified 5-fold cross-validation was used to preserve class proportions across folds and provide reliable generalization estimates.
+Stratified 5-fold cross-validation was used to preserve class proportions across folds and provide reliable generalization estimates. Since subsequent ensembling relied on out-of-fold predictions, it was important to ensure sufficiently large and representative training folds.
 
 ## Hyperparameter Tuning
-Optuna was employed with Tree-structured Parzen Estimator (TPE) sampling to efficiently explore a constrained hyperparameter search space after feature engineering stabilized. Early stopping was applied to prevent overfitting and manage runtime.
+Optuna was employed with Tree-structured Parzen Estimator (TPE) sampling to efficiently explore a constrained hyperparameter search space after feature engineering stabilized. Early stopping was applied to prevent overfitting, manage runtime and handle GPU timeouts.
 
 ## Ensemble Method
 Out-of-fold (OOF) predictions were generated for each of the three models: XGBoost, CatBoost, and LightGBM. These OOF predictions enabled unbiased evaluation and blending. The final ensemble is a linear blend of the three models' probability outputs. Blend weights were selected via a direct three-weight (2 degrees of freedom) search optimizing OOF ROC-AUC. This approach leverages error diversity among models and reduces overfitting risk compared to tuning on in-fold predictions.
 
 ## Figures and Diagnostics
 
-The following figures are included after this section:
+The following figures summarize model training dynamics and motivate the ensemble strategy:
 
 **Figure 1. Validation ROC-AUC (mean ± 1 std across folds).**  
-Comparison of XGBoost, LightGBM, and CatBoost showing the mean validation ROC-AUC across boosting iterations, with shaded regions indicating one standard deviation across cross-validation folds.
+This figure shows the mean validation ROC-AUC across boosting iterations for XGBoost, CatBoost, and LightGBM, with shaded regions indicating one standard deviation across cross-validation folds. Clearly, all three models rank really close to each other.
+
+![Validation ROC-AUC](figures/comparison_auc_val_mean_std.png)
 
 **Figure 2. Validation Logloss (mean ± 1 std across folds).**  
-Comparison of XGBoost, LightGBM, and CatBoost showing the mean validation logloss across boosting iterations, with shaded regions indicating one standard deviation across cross-validation folds.
+This figure shows the mean validation logloss across boosting iterations for the same three models, with shaded regions indicating one standard deviation across cross-validation folds. Again, all three models rank really close to each other, although LightGBM and CatBoost were trained for longer and had more iterations.
+
+![Validation Logloss](figures/comparison_logloss_val_mean_std.png)
+
+**Figure 3. Feature importance by model.**  
+Feature importance plots for CatBoost, LightGBM, and XGBoost illustrate that each model emphasizes different predictors, indicating complementary decision patterns. Since each model pays attention to different features, the ensemble is more robust to feature selection and can better capture the underlying relationships.
+
+![CatBoost Feature Importance](figures/cv_fold_catboost_feature_importance.png)
+![LightGBM Feature Importance](figures/cv_fold_lightgbm_feature_importance.png)
+![XGBoost Feature Importance](figures/cv_fold_xgboost_feature_importance.png)
+
+**Figure 4. Ensemble prediction distribution.**  
+The distribution of predicted probabilities from the ensemble compared with individual models highlights subtle but meaningful differences in calibration and confidence.
+
+![Ensemble Prediction Histogram](figures/ensemble_pred_hist.png)
 
 ## Learnings
 What worked:
-- Native categorical handling simplified preprocessing and improved validation stability.
 - A small, motivated set of ratio features added meaningful signal without inflating the feature space.
 - Stratified cross-validation with OOF predictions enabled reliable model comparison and ensembling.
+- Native categorical handling simplified preprocessing and improved validation stability.
 - Ensembling multiple models improved predictive performance over any single model.
 
 What did not:
 - Aggressive feature expansion via one-hot encoding was inefficient at this scale and added complexity without clear gains.
 
 ## Concepts and Tools Used (Scripts)
-- Data handling and EDA: pandas and numpy workflows for sanity checks, class balance, and distribution inspection.
+- Data handling and EDA: pandas and numpy workflows for sanity checks, class balance, and distribution and correlation inspection.
 - Validation and metrics: Stratified K-fold CV, ROC-AUC evaluation, out-of-fold predictions.
 - Feature processing: ordinal encoding, one-hot encoding, native categorical handling.
 - Models: XGBoost, CatBoost, LightGBM classifiers.
@@ -63,8 +79,6 @@ What did not:
 
 ## Footnote: Leaderboard Context
 
-At the end of the competition, the final submission achieved **Rank 1279** with a **ROC-AUC of 0.69496**, improving by **47 positions** relative to the public leaderboard.
+At the end of the competition, the final submission achieved **Rank 1279** with a **ROC-AUC of 0.69496**, improving by **47 positions** relative to the public leaderboard position.
 
-For reference, the top-ranked submission (**Rank 1**, ROC-AUC **0.70504**) reported using an extensive hill-climbing ensemble involving **40+ models**. This comparison highlights the diminishing returns of increasingly complex ensembles: the gap between a small, well-validated blend of a few strong models and a large-scale ensemble is relatively modest, while the latter requires substantially more engineering effort and computational resources.
-
-This project intentionally prioritizes **methodological clarity, reproducibility, and validation correctness** over leaderboard maximization, using out-of-fold predictions and simple linear blending rather than large-scale ensemble construction.
+For reference, the top-ranked submission (**Rank 1**, ROC-AUC **0.70504**) reported using an extensive hill-climbing ensemble involving **40+ models**. This comparison highlights the diminishing returns of increasingly complex ensembles: the gap between a small, well-validated blend of a few strong models and a large-scale ensemble is relatively modest with low returns, while the latter requires substantially more engineering effort and computational resources, which also is required to squeeze out the best performance.
