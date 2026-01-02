@@ -79,6 +79,6 @@ What did not:
 
 ## Footnote: Leaderboard Context
 
-At the end of the competition, the final submission achieved **Rank 1279** with a **ROC-AUC of 0.69496**, improving by **47 positions** relative to the public leaderboard position.
+At the end of the competition, the final submission achieved **ROC-AUC of 0.69496**.
 
-For reference, the top-ranked submission (**Rank 1**, ROC-AUC **0.70504**) reported using an extensive hill-climbing ensemble involving **40+ models**. This comparison highlights the diminishing returns of increasingly complex ensembles: the gap between a small, well-validated blend of a few strong models and a large-scale ensemble is relatively modest with low returns, while the latter requires substantially more engineering effort and computational resources, which also is required to squeeze out the best performance.
+For reference, the top-ranked submission (ROC-AUC **0.70504**) reported using an extensive hill-climbing ensemble involving **40+ models**. This comparison highlights the diminishing returns of increasingly complex ensembles: the gap between a small, well-validated blend of a few strong models and a large-scale ensemble is relatively modest with low returns, while the latter requires substantially more engineering effort and computational resources, which also is required to squeeze out the best performance.
