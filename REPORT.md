@@ -1,12 +1,12 @@
-# Diabetes Prediction (Binary Classification) Report
+# Diabetes Prediction Binary Classification Report
 
 ## Problem and Metric
 This project predicts whether a patient is diagnosed with diabetes based on tabular clinical and demographic features. It is a binary classification task evaluated with ROC-AUC, which is appropriate under class imbalance and avoids committing to a fixed decision threshold. The competition is hosted on Kaggle: https://www.kaggle.com/competitions/playground-series-s5e12/overview/abstract
 
-## Data Summary (Modeling-Relevant Only)
+## Data Summary
 The training set contains 700,000 rows and 26 columns (including `id` and the target), while the test set has 300,000 rows and 25 columns. Features consist of numerical and categorical variables without missing values. These properties favor tree-based models that efficiently handle heterogeneous feature types and large sample sizes.
 
-## Feature Engineering (Motivation and Scope)
+## Feature Engineering
 A small set of ratio and interaction features was added based on routinely available measurements:
 - Pulse pressure: systolic blood pressure − diastolic blood pressure
 - Non-HDL cholesterol: total cholesterol − HDL cholesterol
@@ -65,7 +65,7 @@ What worked:
 What did not:
 - Aggressive feature expansion via one-hot encoding was inefficient at this scale and added complexity without clear gains.
 
-## Concepts and Tools Used (Scripts)
+## Concepts and Tools Used
 - Data handling and EDA: pandas and numpy workflows for sanity checks, class balance, and distribution and correlation inspection.
 - Validation and metrics: Stratified K-fold CV, ROC-AUC evaluation, out-of-fold predictions.
 - Feature processing: ordinal encoding, one-hot encoding, native categorical handling.
