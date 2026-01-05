@@ -18,7 +18,7 @@ A small set of ratio and interaction features was added based on routinely avail
 While tree-based models can learn non-linear relationships implicitly, including these carefully chosen features directly improves model stability and data efficiency.
 
 ## Model Selection Rationale
-XGBoost served as the baseline model but required categorical features to be encoded as either ordinal or one-hot, which imposes assumptions that may not hold, such as treating education level as ordinal when it is not strictly ordered for diabetes prediction. CatBoost and LightGBM were selected because they natively handle categorical features and scale efficiently to large tabular datasets. With their native categorical handling, the pipeline is simplified, artificial orderings or sparse high-dimensional encodings are avoided.
+XGBoost served as the baseline model but required categorical features to be encoded as either ordinal or one-hot, which imposes assumptions that may not hold (e.g., treating education level as ordinal). All three models considered—XGBoost, LightGBM, and CatBoost—are gradient-boosted decision tree (GBDT) methods optimized via second-order (gradient and Hessian) objectives. LightGBM and CatBoost were selected in addition to XGBoost because they natively handle categorical features, with LightGBM prioritizing computational efficiency through gradient-based categorical splits and CatBoost prioritizing statistical robustness via ordered target statistics and ordered boosting.
 
 ## Cross-Validation Strategy
 Stratified 5-fold cross-validation was used to preserve class proportions across folds and provide reliable generalization estimates. Since subsequent ensembling relied on out-of-fold predictions, it was important to ensure sufficiently large and representative training folds.
@@ -27,7 +27,7 @@ Stratified 5-fold cross-validation was used to preserve class proportions across
 Optuna was employed with Tree-structured Parzen Estimator (TPE) sampling to efficiently explore a constrained hyperparameter search space after feature engineering stabilized. Early stopping was applied to prevent overfitting, manage runtime and handle GPU timeouts.
 
 ## Ensemble Method
-Out-of-fold (OOF) predictions were generated for each of the three models: XGBoost, CatBoost, and LightGBM. These OOF predictions enabled unbiased evaluation and blending. The final ensemble is a linear blend of the three models' probability outputs. Blend weights were selected via a direct three-weight (2 degrees of freedom) search optimizing OOF ROC-AUC. This approach leverages error diversity among models and reduces overfitting risk compared to tuning on in-fold predictions.
+Out-of-fold (OOF) predictions were generated for each of the three models: XGBoost, CatBoost, and LightGBM. These OOF predictions enabled unbiased evaluation and blending. The final ensemble is a linear blend of the three models' probability outputs. Blend weights were selected via a direct three-weight (2 degrees of freedom) search optimizing OOF ROC-AUC. This approach leverages error diversity among models and reduces overfitting risk compared to tuning on in-fold predictions. Although the three models optimize similar objectives, they differ in tree growth strategies, categorical handling, and regularization behavior, resulting in partially uncorrelated errors. This diversity motivates ensembling and explains the consistent performance gain over any individual model.
 
 ## Figures and Diagnostics
 
@@ -74,8 +74,10 @@ What did not:
 - Ensembling: linear blending of model probabilities with weight selection using OOF ROC-AUC.
 
 ## References
+- Chen and Guestrin, "XGBoost: A Scalable Tree Boosting System."
 - Prokhorenkova et al., "CatBoost: unbiased boosting with categorical features."
 - Ke et al., "LightGBM: A Highly Efficient Gradient Boosting Decision Tree."
+- Friedman, "Greedy Function Approximation: A Gradient Boosting Machine."
 
 ## Footnote: Leaderboard Context
 
