@@ -77,7 +77,7 @@ What did not:
 - Chen and Guestrin, "XGBoost: A Scalable Tree Boosting System."
 - Prokhorenkova et al., "CatBoost: unbiased boosting with categorical features."
 - Ke et al., "LightGBM: A Highly Efficient Gradient Boosting Decision Tree."
-- Friedman, "Greedy Function Approximation: A Gradient Boosting Machine."
+- Anghel et al., "Benchmarking and Optimization of Gradient Boosting Decision Tree Algorithms."
 
 ## Footnote: Leaderboard Context
 
